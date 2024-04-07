@@ -1,0 +1,155 @@
+import cv2
+import dlib
+import numpy as np
+import time
+import threading
+
+# Initialize OpenCV VideoCapture
+cap = cv2.VideoCapture(0)
+
+# Initialize dlib face detector and shape predictor
+detector = dlib.get_frontal_face_detector()
+predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
+
+# Create an empty board for text display
+board = np.zeros((700, 1500), np.uint8)
+board[:] = 255
+
+# Define keyboard settings
+Keyboard = np.zeros((200, 800, 3), np.uint8)
+key_set_1 = {
+    0: "Q", 1: "W", 2: "E", 3: "R", 4: "T", 5: "Y", 6: "U", 7: "I", 8: "O", 9: "P",
+    10: "A", 11: "S", 12: "D", 13: "F", 14: "G", 15: "H", 16: "J", 17: "K", 18: "L", 19: ";",
+    20: "Z", 21: "X", 22: "C", 23: "V", 24: "B", 25: "N", 26: "M",
+}
+
+# Variables for blink detection
+blink_detected = False
+blink_start_time = 0
+blink_delay = 0.45  # Adjust this value for the desired blink delay (decreased by 10%)
+
+# Global text variable
+text = ""
+
+# Function to draw a letter on the keyboard
+def letter(letter_index, text, letter_light):
+    x = (letter_index % 10) * 80
+    y = (letter_index // 10) * 80
+
+    width = 80
+    height = 80
+    th = 3  # Thickness
+
+    if letter_light:
+        cv2.rectangle(Keyboard, (x + th, y + th), (x + width - th, y + height - th), (255, 255, 255), -1)
+    else:
+        cv2.rectangle(Keyboard, (x + th, y + th), (x + width - th, y + height - th), (255, 0, 0), th)
+
+    # Text settings
+    font_letter = cv2.FONT_HERSHEY_PLAIN
+    font_scale = 3
+    font_th = 2
+    text_size = cv2.getTextSize(text, font_letter, font_scale, font_th)[0]
+    width_text, height_text = text_size[0], text_size[1]
+    text_x = int((width - width_text) / 2) + x
+    text_y = int((height + height_text) / 2) + y
+
+    cv2.putText(Keyboard, text, (text_x, text_y), font_letter, font_scale, (255, 0, 0), font_th)
+
+
+# Function to calculate midpoint between two points
+def midpoint(p1, p2):
+    return int((p1.x + p2.x) / 2), int((p1.y + p2.y) / 2)
+
+
+# Function to get eye blinking ratio
+def get_eye_blinking_ratio(eye_points, facial_landmarks):
+    left_point = (facial_landmarks.part(eye_points[0]).x, facial_landmarks.part(eye_points[0]).y)
+    right_point = (facial_landmarks.part(eye_points[3]).x, facial_landmarks.part(eye_points[3]).y)
+    center_top = midpoint(facial_landmarks.part(eye_points[1]), facial_landmarks.part(eye_points[2]))
+    center_bottom = midpoint(facial_landmarks.part(eye_points[5]), facial_landmarks.part(eye_points[4]))
+
+    hor_line_length = np.hypot((left_point[0] - right_point[0]), (left_point[1] - right_point[1]))
+    ver_line_length = np.hypot((center_top[0] - center_bottom[0]), (center_top[1] - center_bottom[1]))
+
+    ratio = hor_line_length / ver_line_length
+    return ratio
+
+
+# Function to process blinking detection
+def detect_blinking():
+    global frames, letter_index, text, blink_detected, blink_start_time
+
+    while True:
+        _, frame = cap.read()
+        frame = cv2.resize(frame, None, fx=0.5, fy=0.5)
+        Keyboard[:] = (0, 0, 0)
+        frames += 1
+        new_frame = np.zeros((500, 500, 3), np.uint8)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        active_letter = key_set_1[letter_index]
+
+        faces = detector(gray)
+        for face in faces:
+            landmarks = predictor(gray, face)
+
+            # Eye blinking detection
+            left_eye_ratio = get_eye_blinking_ratio([36, 37, 38, 39, 40, 41], landmarks)
+            right_eye_ratio = get_eye_blinking_ratio([42, 43, 44, 45, 46, 47], landmarks)
+
+            blinking_ratio = (left_eye_ratio + right_eye_ratio) / 2
+
+            if blinking_ratio > 5.5:
+                if not blink_detected:
+                    blink_detected = True
+                    blink_start_time = time.time()
+
+            else:
+                if blink_detected:
+                    blink_detected = False
+                    if time.time() - blink_start_time < blink_delay:
+                        text += active_letter
+
+        # Letters
+        if frames == 8:  # Increase speed here
+            letter_index += 1
+            frames = 0
+        if letter_index == 26:
+            letter_index = 0
+
+        for i in range(26):  # Adjust range for new keys
+            letter(i, key_set_1[i], i == letter_index)
+
+        cv2.putText(board, text, (10, 100), font, 4, 0, 3)
+
+        cv2.imshow("Frame", frame)
+        cv2.imshow("Virtual Keyboard", Keyboard)
+        cv2.imshow("Board", board)
+
+        key = cv2.waitKey(1)
+        if key == 27:
+            break
+
+
+# Main function
+if __name__ == "__main__":
+    # Counters and initializations
+    frames = 0
+    letter_index = 0
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # Start blinking detection thread
+    blink_thread = threading.Thread(target=detect_blinking)
+    blink_thread.start()
+
+    # Wait for the user to press ESC to exit
+    while True:
+        key = cv2.waitKey(1)
+        if key == 27:
+            break
+
+    # Release resources and close windows
+    cap.release()
+    cv2.destroyAllWindows()
